@@ -7,6 +7,9 @@ from  app.schemas.travel_plan_related_schemas  import (
     AppResponse
 )
 from app.core.agents.trip_planner_agent import get_trip_planner_agent
+from app.core.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/trip", tags=["旅行规划"])
 
@@ -28,29 +31,27 @@ async def plan_trip(request: TripRequest):
         旅行计划响应
     """
     try:
-        print(f"\n{'='*60}")
-        print(f"📥 收到旅行规划请求:")
-        print(f"   城市: {request.city}")
-        print(f"   日期: {request.start_date} - {request.end_date}")
-        print(f"   天数: {request.travel_days}")
-        print(f"{'='*60}\n")
+        logger.info("="*60)
+        logger.info("📥 收到旅行规划请求:")
+        logger.info(f"   城市: {request.city}")
+        logger.info(f"   日期: {request.start_date} - {request.end_date}")
+        logger.info(f"   天数: {request.travel_days}")
+        logger.info("="*60)
 
         # 获取Agent实例
-        print("🔄 获取LangGraph多智能体系统实例...")
+        logger.info("🔄 获取LangGraph多智能体系统实例...")
         agent = get_trip_planner_agent()
 
         # 生成旅行计划
-        print("🚀 开始生成旅行计划...")
+        logger.info("🚀 开始生成旅行计划...")
         trip_plan = agent.plan_trip(request)
 
-        print("✅ 旅行计划生成成功,准备返回响应\n")
+        logger.info("✅ 旅行计划生成成功,准备返回响应")
 
         return AppResponse.success(data=trip_plan, message="旅行计划生成成功")
 
     except Exception as e:
-        print(f"❌ 生成旅行计划失败: {str(e)}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"❌ 生成旅行计划失败: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail=f"生成旅行计划失败: {str(e)}"
@@ -74,6 +75,7 @@ async def health_check():
             "type": "LangGraph"
         })
     except Exception as e:
+        logger.error(f"健康检查失败: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=503,
             detail=f"服务不可用: {str(e)}"

@@ -1,11 +1,14 @@
 """POI相关API路由"""
 
+import logging
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict
 from app.services.amap_service import get_amap_service
 from app.services.unsplash_service import get_unsplash_service
 from app.schemas.travel_plan_related_schemas import AppResponse, POIInfo
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/poi", tags=["POI"])
 
@@ -40,7 +43,7 @@ async def get_poi_detail(poi_id: str):
         return AppResponse.success(data=result, message="获取POI详情成功")
         
     except Exception as e:
-        print(f"❌ 获取POI详情失败: {str(e)}")
+        logger.error(f"❌ 获取POI详情失败: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail=f"获取POI详情失败: {str(e)}"

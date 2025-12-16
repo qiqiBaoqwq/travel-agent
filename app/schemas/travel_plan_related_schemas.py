@@ -1,7 +1,11 @@
 
 """数据模型定义"""
+import operator
+from typing import List, Optional, Union, Any, TypeVar, Generic, TypedDict, \
+    Annotated, Dict
 
-from typing import List, Optional, Union, Any, TypeVar, Generic
+from langchain_core.messages import BaseMessage
+from langgraph.graph import add_messages
 from pydantic import BaseModel, Field, field_validator, ConfigDict
 
 
@@ -150,12 +154,6 @@ class TripPlan(BaseModel):
     budget: Optional[Budget] = Field(default=None, description="预算信息")
 
 
-class TripPlanResponse(BaseModel):
-    """旅行计划响应"""
-    success: bool = Field(..., description="是否成功")
-    message: str = Field(default="", description="消息")
-    data: Optional[TripPlan] = Field(default=None, description="旅行计划数据")
-
 
 class POIInfo(BaseModel):
     """POI信息"""
@@ -167,12 +165,6 @@ class POIInfo(BaseModel):
     tel: Optional[str] = Field(default=None, description="电话")
 
 
-class POISearchResponse(BaseModel):
-    """POI搜索响应"""
-    success: bool = Field(..., description="是否成功")
-    message: str = Field(default="", description="消息")
-    data: List[POIInfo] = Field(default=[], description="POI列表")
-
 
 class RouteInfo(BaseModel):
     """路线信息"""
@@ -181,28 +173,26 @@ class RouteInfo(BaseModel):
     route_type: str = Field(..., description="路线类型")
     description: str = Field(..., description="路线描述")
 
+# ============ 状态定义 ============
+def merge_dicts(left: Dict[str, str], right: Dict[str, str]) -> Dict[str, str]:
+    """合并字典，用于收集各个Agent的结果"""
+    result = left.copy()
+    result.update(right)
+    return result
 
-class RouteResponse(BaseModel):
-    """路线规划响应"""
-    success: bool = Field(..., description="是否成功")
-    message: str = Field(default="", description="消息")
-    data: Optional[RouteInfo] = Field(default=None, description="路线信息")
-
-
-class WeatherResponse(BaseModel):
-    """天气查询响应"""
-    success: bool = Field(..., description="是否成功")
-    message: str = Field(default="", description="消息")
-    data: List[WeatherInfo] = Field(default=[], description="天气信息")
-
-
-# ============ 错误响应 ============
-
-class ErrorResponse(BaseModel):
-    """错误响应"""
-    success: bool = Field(default=False, description="是否成功")
-    message: str = Field(..., description="错误消息")
-    error_code: Optional[str] = Field(default=None, description="错误代码")
+class TripPlannerState(TypedDict):
+    """旅行规划器状态"""
+    messages: Annotated[List[BaseMessage], add_messages]
+    request: Dict[str, Any]
+    # 任务规划
+    task_plan: str
+    # 各Agent收集的数据
+    agent_results: Annotated[Dict[str, str], merge_dicts]
+    # 完成的任务计数
+    completed_tasks: Annotated[List[str], operator.add]
+    # 最终计划
+    final_plan: str
+    current_step: str
 
 # 泛型类型变量，用于绑定不同的业务响应模型
 T = TypeVar("T")

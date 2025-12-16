@@ -1,9 +1,12 @@
 """Unsplash图片服务"""
 
+import logging
 import requests
 import hashlib
 from typing import List, Optional, Dict
 from app.core.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 # 简单的内存缓存
@@ -59,7 +62,7 @@ class UnsplashService:
             return photos
             
         except Exception as e:
-            print(f"❌ Unsplash搜索失败: {str(e)}")
+            logger.error(f"❌ Unsplash搜索失败: {str(e)}", exc_info=True)
             return []
     
     def get_photo_url(self, query: str, use_cache: bool = True) -> Optional[str]:
@@ -120,14 +123,13 @@ class UnsplashService:
                     name, url = future.result()
                     results[name] = url
                 except Exception as e:
-                    print(f"❌ 批量获取图片失败: {str(e)}")
+                    logger.error(f"❌ 批量获取图片失败: {str(e)}", exc_info=True)
         
         return results
 
 
 # 全局服务实例
 _unsplash_service = None
-
 
 def get_unsplash_service() -> UnsplashService:
     """获取Unsplash服务实例(单例模式)"""

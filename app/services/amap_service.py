@@ -1,9 +1,12 @@
 """高德地图MCP服务封装"""
 
+import logging
 from typing import List, Dict, Any, Optional
 from hello_agents.tools import MCPTool
 from app.core.config import get_settings
 from app.schemas.travel_plan_related_schemas import Location, POIInfo, WeatherInfo
+
+logger = logging.getLogger(__name__)
 
 # 全局MCP工具实例
 _amap_mcp_tool = None
@@ -33,16 +36,16 @@ def get_amap_mcp_tool() -> MCPTool:
             auto_expand=True  # 自动展开为独立工具
         )
         
-        print(f"✅ 高德地图MCP工具初始化成功")
-        print(f"   工具数量: {len(_amap_mcp_tool._available_tools)}")
+        logger.info(f"✅ 高德地图MCP工具初始化成功")
+        logger.info(f"   工具数量: {len(_amap_mcp_tool._available_tools)}")
         
         # 打印可用工具列表
         if _amap_mcp_tool._available_tools:
-            print("   可用工具:")
+            logger.info("   可用工具:")
             for tool in _amap_mcp_tool._available_tools[:5]:  # 只打印前5个
-                print(f"     - {tool.get('name', 'unknown')}")
+                logger.info(f"     - {tool.get('name', 'unknown')}")
             if len(_amap_mcp_tool._available_tools) > 5:
-                print(f"     ... 还有 {len(_amap_mcp_tool._available_tools) - 5} 个工具")
+                logger.info(f"     ... 还有 {len(_amap_mcp_tool._available_tools) - 5} 个工具")
     
     return _amap_mcp_tool
 
@@ -81,13 +84,13 @@ class AmapService:
             # 解析结果
             # 注意: MCP工具返回的是字符串,需要解析
             # 这里简化处理,实际应该解析JSON
-            print(f"POI搜索结果: {result[:200]}...")  # 打印前200字符
+            logger.debug(f"POI搜索结果: {result[:200]}...")  # 打印前200字符
             
             # TODO: 解析实际的POI数据
             return []
             
         except Exception as e:
-            print(f"❌ POI搜索失败: {str(e)}")
+            logger.error(f"❌ POI搜索失败: {str(e)}", exc_info=True)
             return []
     
     def get_weather(self, city: str) -> List[WeatherInfo]:
@@ -110,13 +113,13 @@ class AmapService:
                 }
             })
             
-            print(f"天气查询结果: {result[:200]}...")
+            logger.debug(f"天气查询结果: {result[:200]}...")
             
             # TODO: 解析实际的天气数据
             return []
             
         except Exception as e:
-            print(f"❌ 天气查询失败: {str(e)}")
+            logger.error(f"❌ 天气查询失败: {str(e)}", exc_info=True)
             return []
     
     def plan_route(
@@ -176,13 +179,13 @@ class AmapService:
                 "arguments": arguments
             })
             
-            print(f"路线规划结果: {result[:200]}...")
+            logger.debug(f"路线规划结果: {result[:200]}...")
             
             # TODO: 解析实际的路线数据
             return {}
             
         except Exception as e:
-            print(f"❌ 路线规划失败: {str(e)}")
+            logger.error(f"❌ 路线规划失败: {str(e)}", exc_info=True)
             return {}
     
     def geocode(self, address: str, city: Optional[str] = None) -> Optional[Location]:
@@ -207,13 +210,13 @@ class AmapService:
                 "arguments": arguments
             })
 
-            print(f"地理编码结果: {result[:200]}...")
+            logger.debug(f"地理编码结果: {result[:200]}...")
 
             # TODO: 解析实际的坐标数据
             return None
 
         except Exception as e:
-            print(f"❌ 地理编码失败: {str(e)}")
+            logger.error(f"❌ 地理编码失败: {str(e)}", exc_info=True)
             return None
 
     def get_poi_detail(self, poi_id: str) -> Dict[str, Any]:
@@ -235,7 +238,7 @@ class AmapService:
                 }
             })
 
-            print(f"POI详情结果: {result[:200]}...")
+            logger.debug(f"POI详情结果: {result[:200]}...")
 
             # 解析结果并提取图片
             import json
@@ -250,7 +253,7 @@ class AmapService:
             return {"raw": result}
 
         except Exception as e:
-            print(f"❌ 获取POI详情失败: {str(e)}")
+            logger.error(f"❌ 获取POI详情失败: {str(e)}", exc_info=True)
             return {}
 
 

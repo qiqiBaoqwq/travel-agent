@@ -2,310 +2,25 @@
 
 import os
 import json
-import httpx
-import operator
-from typing import Dict, Any, List, Annotated, TypedDict, Literal
+import threading
+from typing import Dict, Any, Literal
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import HumanMessage, SystemMessage, BaseMessage
-from langchain_core.tools import tool
+from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import StateGraph, END, START
-from langgraph.graph.message import add_messages
 
-from  app.schemas.travel_plan_related_schemas  import (TripRequest, TripPlan, DayPlan, Attraction,
-                               Meal,
-                        WeatherInfo, Location, Hotel)
-from  app.core.config import get_settings
+from app.core.tools.travel_details_tools import (search_weather,
+                                                 search_attractions,
+                                                 search_hotels)
 
+from app.core.prompts import SCHEDULER_AGENT_PROMPT, SUMMARIZER_AGENT_PROMPT
+from app.schemas.travel_plan_related_schemas import (TripRequest, TripPlan,
+                                                     DayPlan, Attraction,
+                                                     Meal,
+                                                     Location,
+                                                     TripPlannerState)
+from app.core.logging_config import get_logger
 
-# ============ 状态定义 ============
-
-def merge_dicts(left: Dict[str, str], right: Dict[str, str]) -> Dict[str, str]:
-    """合并字典，用于收集各个Agent的结果"""
-    result = left.copy()
-    result.update(right)
-    return result
-
-class TripPlannerState(TypedDict):
-    """旅行规划器状态"""
-    messages: Annotated[List[BaseMessage], add_messages]
-    request: Dict[str, Any]
-    # 任务规划
-    task_plan: str
-    # 各Agent收集的数据
-    agent_results: Annotated[Dict[str, str], merge_dicts]
-    # 完成的任务计数
-    completed_tasks: Annotated[List[str], operator.add]
-    # 最终计划
-    final_plan: str
-    current_step: str
-
-
-# ============ 工具定义 ============
-
-@tool
-def search_attractions(keywords: str, city: str) -> str:
-    """
-    搜索景点信息
-    
-    Args:
-        keywords: 搜索关键词，如"历史文化"、"公园"、"美食"等
-        city: 城市名称，如"北京"、"上海"等
-    
-    Returns:
-        景点搜索结果的JSON字符串
-    """
-    settings = get_settings()
-    api_key = settings.amap_api_key
-    
-    url = "https://restapi.amap.com/v3/place/text"
-    params = {
-        "key": api_key,
-        "keywords": keywords,
-        "city": city,
-        "citylimit": "true",
-        "offset": 20,
-        "extensions": "all"
-    }
-    
-    try:
-        with httpx.Client(timeout=30) as client:
-            response = client.get(url, params=params)
-            data = response.json()
-            
-            if data.get("status") == "1" and data.get("pois"):
-                pois = data["pois"][:10]
-                results = []
-                for poi in pois:
-                    location = poi.get("location", "").split(",")
-                    results.append({
-                        "name": poi.get("name", ""),
-                        "address": poi.get("address", ""),
-                        "type": poi.get("type", ""),
-                        "tel": poi.get("tel", ""),
-                        "location": {
-                            "longitude": float(location[0]) if len(location) == 2 else 0,
-                            "latitude": float(location[1]) if len(location) == 2 else 0
-                        }
-                    })
-                return json.dumps(results, ensure_ascii=False, indent=2)
-            else:
-                return json.dumps({"error": "未找到相关景点", "city": city, "keywords": keywords}, ensure_ascii=False)
-    except Exception as e:
-        return json.dumps({"error": str(e)}, ensure_ascii=False)
-
-
-@tool
-def search_weather(city: str) -> str:
-    """
-    查询城市天气信息
-    
-    Args:
-        city: 城市名称，如"北京"、"上海"等
-    
-    Returns:
-        天气信息的JSON字符串
-    """
-    settings = get_settings()
-    api_key = settings.amap_api_key
-    
-    url = "https://restapi.amap.com/v3/weather/weatherInfo"
-    params = {
-        "key": api_key,
-        "city": city,
-        "extensions": "all"
-    }
-    
-    try:
-        with httpx.Client(timeout=30) as client:
-            response = client.get(url, params=params)
-            data = response.json()
-            
-            if data.get("status") == "1" and data.get("forecasts"):
-                forecasts = data["forecasts"][0]
-                casts = forecasts.get("casts", [])
-                results = {
-                    "city": forecasts.get("city", city),
-                    "province": forecasts.get("province", ""),
-                    "forecasts": [
-                        {
-                            "date": cast.get("date", ""),
-                            "week": cast.get("week", ""),
-                            "dayweather": cast.get("dayweather", ""),
-                            "nightweather": cast.get("nightweather", ""),
-                            "daytemp": cast.get("daytemp", ""),
-                            "nighttemp": cast.get("nighttemp", ""),
-                            "daywind": cast.get("daywind", ""),
-                            "nightwind": cast.get("nightwind", ""),
-                            "daypower": cast.get("daypower", ""),
-                            "nightpower": cast.get("nightpower", "")
-                        }
-                        for cast in casts
-                    ]
-                }
-                return json.dumps(results, ensure_ascii=False, indent=2)
-            else:
-                return json.dumps({"error": "未找到天气信息", "city": city}, ensure_ascii=False)
-    except Exception as e:
-        return json.dumps({"error": str(e)}, ensure_ascii=False)
-
-
-@tool
-def search_hotels(city: str, hotel_type: str = "酒店") -> str:
-    """
-    搜索酒店信息
-    
-    Args:
-        city: 城市名称，如"北京"、"上海"等
-        hotel_type: 酒店类型，如"经济型酒店"、"豪华酒店"等
-    
-    Returns:
-        酒店搜索结果的JSON字符串
-    """
-    settings = get_settings()
-    api_key = settings.amap_api_key
-    
-    url = "https://restapi.amap.com/v3/place/text"
-    params = {
-        "key": api_key,
-        "keywords": hotel_type,
-        "city": city,
-        "citylimit": "true",
-        "types": "100000",
-        "offset": 10,
-        "extensions": "all"
-    }
-    
-    try:
-        with httpx.Client(timeout=30) as client:
-            response = client.get(url, params=params)
-            data = response.json()
-            
-            if data.get("status") == "1" and data.get("pois"):
-                pois = data["pois"][:8]
-                results = []
-                for poi in pois:
-                    location = poi.get("location", "").split(",")
-                    results.append({
-                        "name": poi.get("name", ""),
-                        "address": poi.get("address", ""),
-                        "type": poi.get("type", ""),
-                        "tel": poi.get("tel", ""),
-                        "location": {
-                            "longitude": float(location[0]) if len(location) == 2 else 0,
-                            "latitude": float(location[1]) if len(location) == 2 else 0
-                        }
-                    })
-                return json.dumps(results, ensure_ascii=False, indent=2)
-            else:
-                return json.dumps({"error": "未找到相关酒店", "city": city}, ensure_ascii=False)
-    except Exception as e:
-        return json.dumps({"error": str(e)}, ensure_ascii=False)
-
-
-# ============ Agent提示词 ============
-
-SCHEDULER_AGENT_PROMPT = """你是旅行规划调度专家。你的职责是：
-1. 分析用户的旅行需求
-2. 制定任务计划，明确需要收集哪些信息
-3. 协调其他专业Agent完成各自的任务
-
-请根据用户需求，输出一个清晰的任务规划，说明：
-- 需要搜索什么类型的景点
-- 需要查询哪个城市的天气
-- 需要搜索什么类型的酒店
-
-格式：
-```
-任务规划:
-1. 景点搜索: [关键词] - [城市]
-2. 天气查询: [城市]
-3. 酒店搜索: [酒店类型] - [城市]
-```
-"""
-
-ATTRACTION_AGENT_PROMPT = """你是景点搜索专家。你的任务是根据城市和用户偏好搜索合适的景点。
-
-请使用 search_attractions 工具来搜索景点信息。
-
-**注意:**
-1. 必须使用工具来获取真实的景点数据
-2. 根据用户偏好选择合适的关键词进行搜索
-3. 整理搜索结果并给出清晰的景点列表
-"""
-
-WEATHER_AGENT_PROMPT = """你是天气查询专家。你的任务是查询指定城市的天气信息。
-
-请使用 search_weather 工具来查询天气。
-
-**注意:**
-1. 必须使用工具来获取真实的天气数据
-2. 整理天气信息并给出未来几天的天气预报
-"""
-
-HOTEL_AGENT_PROMPT = """你是酒店推荐专家。你的任务是根据城市和用户需求搜索合适的酒店。
-
-请使用 search_hotels 工具来搜索酒店。
-
-**注意:**
-1. 必须使用工具来获取真实的酒店数据
-2. 根据用户的住宿偏好选择合适的酒店类型
-"""
-
-SUMMARIZER_AGENT_PROMPT = """你是行程规划专家。你的任务是根据景点信息、天气信息和酒店信息，生成详细的旅行计划。
-
-**重要: 必须返回完整的JSON，不能截断！如果内容太长，请精简描述而不是省略结构。**
-
-请严格按照以下JSON格式返回旅行计划:
-```json
-{
-  "city": "城市名称",
-  "start_date": "YYYY-MM-DD",
-  "end_date": "YYYY-MM-DD",
-  "days": [
-    {
-      "date": "YYYY-MM-DD",
-      "day_index": 0,
-      "description": "简短行程概述(20字内)",
-      "transportation": "交通方式",
-      "accommodation": "住宿类型",
-      "hotel": {
-        "name": "酒店名称",
-        "address": "简短地址",
-        "location": {"longitude": 116.39, "latitude": 39.91},
-        "price_range": "300-500元",
-        "rating": "4.5",
-        "type": "酒店类型"
-      },
-      "attractions": [
-        {
-          "name": "景点名",
-          "address": "简短地址",
-          "location": {"longitude": 116.39, "latitude": 39.91},
-          "visit_duration": 120,
-          "description": "简短描述(30字内)",
-          "category": "类别"
-        }
-      ],
-      "meals": [
-        {"type": "breakfast", "name": "早餐", "description": "简短描述"},
-        {"type": "lunch", "name": "午餐", "description": "简短描述"},
-        {"type": "dinner", "name": "晚餐", "description": "简短描述"}
-      ]
-    }
-  ],
-  "weather_info": [{"date": "YYYY-MM-DD", "day_weather": "晴", "night_weather": "多云", "day_temp": 25, "night_temp": 15}],
-  "overall_suggestions": "简短建议(50字内)",
-  "budget": {"total": 2000}
-}
-```
-
-**要求:**
-1. 所有描述尽量精简，避免长文本
-2. 温度必须是纯数字
-3. 每天安排2-3个景点
-4. JSON必须完整闭合，确保所有括号配对
-5. 不要添加注释或额外说明
-"""
+logger = get_logger(__name__)
 
 
 class MultiAgentTripPlanner:
@@ -319,7 +34,7 @@ class MultiAgentTripPlanner:
 
     def __init__(self):
         """初始化多智能体系统"""
-        print("🔄 开始初始化LangGraph多智能体旅行规划系统(Scheduler模式)...")
+        logger.info("🔄 开始初始化LangGraph多智能体旅行规划系统(Scheduler模式)...")
 
         try:
             # 从环境变量获取配置
@@ -340,10 +55,10 @@ class MultiAgentTripPlanner:
                 max_tokens=8192,  # 确保有足够的输出空间
             )
             
-            print(f"✅ LLM服务初始化成功")
-            print(f"   模型: {model_id}")
-            print(f"   Base URL: {base_url}")
-            print(f"   Max Tokens: 8192")
+            logger.info("✅ LLM服务初始化成功")
+            logger.info(f"   模型: {model_id}")
+            logger.info(f"   Base URL: {base_url}")
+            logger.info(f"   Max Tokens: {8192}")
             
             # 定义工具
             self.tools = [search_attractions, search_weather, search_hotels]
@@ -355,14 +70,12 @@ class MultiAgentTripPlanner:
             # 创建工作流
             self._build_graph()
             
-            print(f"✅ LangGraph多智能体系统初始化成功(Scheduler模式)")
-            print(f"   可用工具: {[t.name for t in self.tools]}")
-            print(f"   架构: Scheduler -> [Weather, Hotel, Attraction] -> Summarizer")
+            logger.info("✅ LangGraph多智能体系统初始化成功(Scheduler模式)")
+            logger.info(f"   可用工具: {[t.name for t in self.tools]}")
+            logger.info("   架构: Scheduler -> [Weather, Hotel, Attraction] -> Summarizer")
 
         except Exception as e:
-            print(f"❌ 多智能体系统初始化失败: {str(e)}")
-            import traceback
-            traceback.print_exc()
+            logger.error(f"❌ 多智能体系统初始化失败: {str(e)}", exc_info=True)
             raise
 
     def _build_graph(self):
@@ -409,7 +122,7 @@ class MultiAgentTripPlanner:
 
     def _scheduler_plan_node(self, state: TripPlannerState) -> Dict[str, Any]:
         """Scheduler Agent - 规划阶段: 分析任务并制定计划"""
-        print("\n📋 Scheduler Agent: 分析任务并制定计划...")
+        logger.info("\n📋 Scheduler Agent: 分析任务并制定计划...")
         
         request = state["request"]
         
@@ -432,7 +145,7 @@ class MultiAgentTripPlanner:
         
         response = self.llm.invoke(messages)
         
-        print(f"   任务计划: {response.content[:200]}...")
+        logger.info(f"   任务计划: {response.content[:200]}...")
         
         return {
             "messages": messages + [response],
@@ -444,7 +157,7 @@ class MultiAgentTripPlanner:
 
     def _attraction_agent_node(self, state: TripPlannerState) -> Dict[str, Any]:
         """景点搜索Agent - 直接调用工具获取数据"""
-        print("📍 Attraction Agent: 搜索景点...")
+        logger.info("📍 Attraction Agent: 搜索景点...")
         
         request = state["request"]
         preferences = request.get("preferences", [])
@@ -454,7 +167,7 @@ class MultiAgentTripPlanner:
         # 直接调用工具
         result = search_attractions.invoke({"keywords": keywords, "city": city})
         
-        print(f"   景点搜索完成: {result[:100]}...")
+        logger.info(f"   景点搜索完成: {result[:100]}...")
         
         return {
             "agent_results": {"attractions": result},
@@ -463,7 +176,7 @@ class MultiAgentTripPlanner:
 
     def _weather_agent_node(self, state: TripPlannerState) -> Dict[str, Any]:
         """天气查询Agent - 直接调用工具获取数据"""
-        print("🌤️  Weather Agent: 查询天气...")
+        logger.info("🌤️  Weather Agent: 查询天气...")
         
         request = state["request"]
         city = request["city"]
@@ -471,7 +184,7 @@ class MultiAgentTripPlanner:
         # 直接调用工具
         result = search_weather.invoke({"city": city})
         
-        print(f"   天气查询完成: {result[:100]}...")
+        logger.info(f"   天气查询完成: {result[:100]}...")
         
         return {
             "agent_results": {"weather": result},
@@ -480,7 +193,7 @@ class MultiAgentTripPlanner:
 
     def _hotel_agent_node(self, state: TripPlannerState) -> Dict[str, Any]:
         """酒店推荐Agent - 直接调用工具获取数据"""
-        print("🏨 Hotel Agent: 搜索酒店...")
+        logger.info("🏨 Hotel Agent: 搜索酒店...")
         
         request = state["request"]
         city = request["city"]
@@ -489,7 +202,7 @@ class MultiAgentTripPlanner:
         # 直接调用工具
         result = search_hotels.invoke({"city": city, "hotel_type": accommodation})
         
-        print(f"   酒店搜索完成: {result[:100]}...")
+        logger.info(f"   酒店搜索完成: {result[:100]}...")
         
         return {
             "agent_results": {"hotels": result},
@@ -499,7 +212,7 @@ class MultiAgentTripPlanner:
     def _collector_node(self, state: TripPlannerState) -> Dict[str, Any]:
         """收集器节点 - 等待所有Agent完成"""
         completed = state.get("completed_tasks", [])
-        print(f"📦 Collector: 已完成任务 {completed}")
+        logger.info(f"📦 Collector: 已完成任务 {completed}")
         
         # 不做修改，只是一个同步点
         return {}
@@ -510,16 +223,16 @@ class MultiAgentTripPlanner:
         required_tasks = {"attraction", "weather", "hotel"}
         
         if required_tasks.issubset(set(completed)):
-            print("✅ 所有任务已完成，准备总结...")
+            logger.info("✅ 所有任务已完成，准备总结...")
             return "summarize"
         else:
             remaining = required_tasks - set(completed)
-            print(f"⏳ 等待任务完成: {remaining}")
+            logger.info(f"⏳ 等待任务完成: {remaining}")
             return "wait"
 
     def _scheduler_summarize_node(self, state: TripPlannerState) -> Dict[str, Any]:
         """Scheduler Agent - 总结阶段: 整合所有信息生成最终计划"""
-        print("\n📋 Scheduler Agent: 整合信息并生成最终计划...")
+        logger.info("\n📋 Scheduler Agent: 整合信息并生成最终计划...")
         
         request = state["request"]
         agent_results = state.get("agent_results", {})
@@ -556,7 +269,7 @@ class MultiAgentTripPlanner:
         
         response = self.llm.invoke(messages)
         
-        print(f"   最终计划生成完成")
+        logger.info("   最终计划生成完成")
         
         return {
             "messages": messages + [response],
@@ -575,13 +288,13 @@ class MultiAgentTripPlanner:
             旅行计划
         """
         try:
-            print(f"\n{'='*60}")
-            print(f"🚀 开始Scheduler模式多智能体协作规划旅行...")
-            print(f"目的地: {request.city}")
-            print(f"日期: {request.start_date} 至 {request.end_date}")
-            print(f"天数: {request.travel_days}天")
-            print(f"偏好: {', '.join(request.preferences) if request.preferences else '无'}")
-            print(f"{'='*60}\n")
+            logger.info(f"\n{'='*60}")
+            logger.info("🚀 开始Scheduler模式多智能体协作规划旅行...")
+            logger.info(f"目的地: {request.city}")
+            logger.info(f"日期: {request.start_date} 至 {request.end_date}")
+            logger.info(f"天数: {request.travel_days}天")
+            logger.info(f"偏好: {', '.join(request.preferences) if request.preferences else '无'}")
+            logger.info(f"{'='*60}\n")
             
             # 初始状态
             initial_state: TripPlannerState = {
@@ -599,20 +312,18 @@ class MultiAgentTripPlanner:
             
             # 解析最终计划
             final_plan = final_state.get("final_plan", "")
-            print(f"\n行程规划结果: {final_plan[:300]}...\n")
+            logger.info(f"\n行程规划结果: {final_plan[:300]}...\n")
             
             trip_plan = self._parse_response(final_plan, request)
 
-            print(f"{'='*60}")
-            print(f"✅ 旅行计划生成完成!")
-            print(f"{'='*60}\n")
+            logger.info(f"{'='*60}")
+            logger.info("✅ 旅行计划生成完成!")
+            logger.info(f"{'='*60}\n")
 
             return trip_plan
 
         except Exception as e:
-            print(f"❌ 生成旅行计划失败: {str(e)}")
-            import traceback
-            traceback.print_exc()
+            logger.error(f"❌ 生成旅行计划失败: {str(e)}", exc_info=True)
             return self._create_fallback_plan(request)
     
     def _parse_response(self, response: str, request: TripRequest) -> TripPlan:
@@ -648,8 +359,8 @@ class MultiAgentTripPlanner:
             return trip_plan
             
         except Exception as e:
-            print(f"⚠️  解析响应失败: {str(e)}")
-            print(f"   将使用备用方案生成计划")
+            logger.warning(f"⚠️  解析响应失败: {str(e)}")
+            logger.info("   将使用备用方案生成计划")
             return self._create_fallback_plan(request)
     
     def _extract_json(self, response: str) -> str:
@@ -696,7 +407,7 @@ class MultiAgentTripPlanner:
         
         # 如果JSON被截断，尝试修复
         if open_braces != close_braces or open_brackets != close_brackets:
-            print(f"   检测到JSON不完整 ({{ {open_braces}/{close_braces}, [ {open_brackets}/{close_brackets}), 尝试修复...")
+            logger.info(f"   检测到JSON不完整 ({{ {open_braces}/{close_braces}, [ {open_brackets}/{close_brackets}), 尝试修复...")
             
             # 更智能的修复：逐字符分析找到最后一个完整的值
             json_str = self._truncate_to_valid_point(json_str)
@@ -721,7 +432,7 @@ class MultiAgentTripPlanner:
             # 反向添加缺失的括号
             closing = ''.join(reversed(bracket_stack))
             json_str += closing
-            print(f"   添加了缺失的括号: {closing}")
+            logger.info(f"   添加了缺失的括号: {closing}")
         
         return json_str
     
@@ -744,7 +455,7 @@ class MultiAgentTripPlanner:
             if match:
                 result = match.group(1).rstrip(' ,\n\t')
                 if result:
-                    print(f"   使用策略成功截断JSON")
+                    logger.info("   使用策略成功截断JSON")
                     return result
         
         # 如果所有策略都失败，使用原始的逐字符方法
@@ -881,10 +592,19 @@ class MultiAgentTripPlanner:
             weather_info=[],
             overall_suggestions=f"这是为您规划的{request.city}{request.travel_days}日游行程,建议提前查看各景点的开放时间。"
         )
+# =========== 饿汉式线程安全级别的单例模式（加载模块是安全加载，非并发环境） ===========
+# _multi_agent_planner = MultiAgentTripPlanner()
+#
+# def get_trip_planner_agent() -> MultiAgentTripPlanner:
+#     """获取多智能体旅行规划系统实例(单例模式)"""
+#     return _multi_agent_planner
 
 
-# 全局多智能体系统实例
+# 全局多智能体系统实例--实现方式-> 懒汉式线程不安全 （若要安全需双检➕锁）
 _multi_agent_planner = None
+
+# 全局可重入锁
+_lock = threading.RLock()
 
 
 def get_trip_planner_agent() -> MultiAgentTripPlanner:
@@ -892,7 +612,8 @@ def get_trip_planner_agent() -> MultiAgentTripPlanner:
     global _multi_agent_planner
 
     if _multi_agent_planner is None:
-        _multi_agent_planner = MultiAgentTripPlanner()
+        with _lock:
+            if _multi_agent_planner is None:
+                _multi_agent_planner = MultiAgentTripPlanner()
 
     return _multi_agent_planner
-

@@ -1,14 +1,17 @@
 """配置管理模块"""
 
 import os
+import logging
 from pathlib import Path
 from typing import List
 from pydantic_settings import BaseSettings
 from dotenv import load_dotenv
 
+logger = logging.getLogger(__name__)
+
 # 加载环境变量
-# 首先尝试加载当前目录的.env
-load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env", override=False)
+# 加载项目根目录的.env文件
+load_dotenv(dotenv_path=Path(__file__).parent.parent.parent / ".env", override=False)
 
 class Settings(BaseSettings):
     """应用配置"""
@@ -78,9 +81,9 @@ def validate_config():
         raise ValueError(error_msg)
 
     if warnings:
-        print("\n⚠️  配置警告:")
+        logger.warning("⚠️  配置警告:")
         for w in warnings:
-            print(f"  - {w}")
+            logger.warning(f"  - {w}")
 
     return True
 
@@ -88,18 +91,18 @@ def validate_config():
 # 打印配置信息(用于调试)
 def print_config():
     """打印当前配置(隐藏敏感信息)"""
-    print(f"应用名称: {settings.app_name}")
-    print(f"版本: {settings.app_version}")
-    print(f"服务器: {settings.host}:{settings.port}")
-    print(f"高德地图API Key: {'已配置' if settings.amap_api_key else '未配置'}")
+    logger.info(f"应用名称: {settings.app_name}")
+    logger.info(f"版本: {settings.app_version}")
+    logger.info(f"服务器: {settings.host}:{settings.port}")
+    logger.info(f"高德地图API Key: {'已配置' if settings.amap_api_key else '未配置'}")
 
     # 检查LLM配置
     llm_api_key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
     llm_base_url = os.getenv("LLM_BASE_URL") or settings.openai_base_url
     llm_model = os.getenv("LLM_MODEL_ID") or settings.openai_model
 
-    print(f"LLM API Key: {'已配置' if llm_api_key else '未配置'}")
-    print(f"LLM Base URL: {llm_base_url}")
-    print(f"LLM Model: {llm_model}")
-    print(f"日志级别: {settings.log_level}")
+    logger.info(f"LLM API Key: {'已配置' if llm_api_key else '未配置'}")
+    logger.info(f"LLM Base URL: {llm_base_url}")
+    logger.info(f"LLM Model: {llm_model}")
+    logger.info(f"日志级别: {settings.log_level}")
 

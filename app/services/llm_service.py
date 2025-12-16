@@ -1,7 +1,10 @@
 """LLM服务模块"""
 
+import logging
 from hello_agents import HelloAgentsLLM
 from app.core.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 # 全局LLM实例
 _llm_instance = None
@@ -23,9 +26,9 @@ def get_llm() -> HelloAgentsLLM:
         # 包括OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL等
         _llm_instance = HelloAgentsLLM()
         
-        print(f"✅ LLM服务初始化成功")
-        print(f"   提供商: {_llm_instance.provider}")
-        print(f"   模型: {_llm_instance.model}")
+        logger.info(f"✅ LLM服务初始化成功")
+        logger.info(f"   提供商: {_llm_instance.provider}")
+        logger.info(f"   模型: {_llm_instance.model}")
     
     return _llm_instance
 
